@@ -16,6 +16,7 @@ import (
 	"github.com/stashapp/stash/pkg/job"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/strm"
 )
 
 func useAsVideo(pathname string) bool {
@@ -41,6 +42,9 @@ func isZip(pathname string) bool {
 }
 
 func isVideo(pathname string) bool {
+	if strm.IsStrmPath(pathname) {
+		return true
+	}
 	vidExt := config.GetInstance().GetVideoExtensions()
 	return fsutil.MatchExtension(pathname, vidExt)
 }

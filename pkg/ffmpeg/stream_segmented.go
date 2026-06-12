@@ -21,6 +21,7 @@ import (
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/signedurl"
+	"github.com/stashapp/stash/pkg/strm"
 	"github.com/stashapp/stash/pkg/utils"
 
 	"github.com/zencoder/go-dash/v3/mpd"
@@ -344,7 +345,7 @@ func (s *runningStream) makeStreamArgs(sm *StreamManager, segment int) Args {
 		args = args.Seek(float64(segment * segmentLength))
 	}
 
-	args = args.Input(s.vf.Path)
+	args = args.Input(strm.Resolve(s.vf.Path))
 
 	videoOnly := ProbeAudioCodec(s.vf.AudioCodec) == MissingUnsupported
 

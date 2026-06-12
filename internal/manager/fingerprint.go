@@ -11,6 +11,7 @@ import (
 	"github.com/stashapp/stash/pkg/hash/oshash"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/strm"
 )
 
 type fingerprintCalculator struct {
@@ -18,6 +19,27 @@ type fingerprintCalculator struct {
 }
 
 func (c *fingerprintCalculator) calculateOshash(f *models.BaseFile, o file.Opener) (*models.Fingerprint, error) {
+	// For a .strm, hash the REMOTE video (first+last 64KB via HTTP Range), not the
+	// tiny text file. This yields the same oshash as the real file, so the scene
+	// matches stash-boxes on identify and dedups with the mounted copy. The text
+	// file's own size is meaningless here, so fetch the real size via HEAD.
+	if strm.IsStrmPath(f.Path) {
+		url, err := strm.ReadURL(f.Path)
+		if err != nil || url == "" {
+			return nil, fmt.Errorf("reading .strm url for oshash: %w", err)
+		}
+		if strm.IsRemoteURL(url) {
+			hash, err := oshash.FromHTTPAutoSize(url)
+			if err != nil {
+				return nil, fmt.Errorf("calculating remote oshash for .strm: %w", err)
+			}
+			return &models.Fingerprint{
+				Type:        models.FingerprintTypeOshash,
+				Fingerprint: hash,
+			}, nil
+		}
+	}
+
 	r, err := o.Open()
 	if err != nil {
 		return nil, fmt.Errorf("opening file: %w", err)

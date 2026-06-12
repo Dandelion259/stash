@@ -1,0 +1,49 @@
+# This dockerfile should be built with `make docker-build` from the stash root.
+
+# Build Frontend
+FROM node:24-alpine AS frontend
+RUN apk add --no-cache make git
+## cache node_modules separately
+COPY ./ui/v2.5/package.json ./ui/v2.5/pnpm-lock.yaml /stash/ui/v2.5/
+WORKDIR /stash
+COPY Makefile /stash/
+COPY ./graphql /stash/graphql/
+COPY ./ui /stash/ui/
+# pnpm install with npm — install the exact version pinned in package.json's
+# packageManager, else pnpm tries to self-switch via @pnpm/exe, which has no
+# linux-arm64-musl binary.
+RUN npm install -g "$(node -p "require('./ui/v2.5/package.json').packageManager.split('+')[0]")"
+RUN make pre-ui
+RUN make generate-ui
+ARG GITHASH
+ARG STASH_VERSION
+RUN BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S") make ui-only
+
+# Build Backend
+FROM golang:1.25-alpine AS backend
+RUN apk add --no-cache make alpine-sdk
+WORKDIR /stash
+COPY ./go* ./*.go Makefile gqlgen.yml .gqlgenc.yml /stash/
+COPY ./graphql /stash/graphql/
+COPY ./scripts /stash/scripts/
+COPY ./pkg /stash/pkg/
+COPY ./cmd /stash/cmd/
+COPY ./internal /stash/internal/
+# needed for generate-login-locale
+COPY ./ui /stash/ui/
+RUN make generate-backend generate-login-locale
+COPY --from=frontend /stash /stash/
+ARG GITHASH
+ARG STASH_VERSION
+RUN make flags-release flags-pie stash
+
+# Final Runnable Image
+# Runtime packages match the official published image (docker/ci/x86_64/Dockerfile):
+# Python + scraper libs, vips-heif, tzdata — so community Python plugins work.
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates python3 py3-requests py3-requests-toolbelt py3-lxml py3-pip ffmpeg tzdata vips vips-tools vips-heif \
+    && pip install --break-system-packages mechanicalsoup cloudscraper stashapp-tools
+COPY --from=backend /stash/stash /usr/bin/
+ENV STASH_CONFIG_FILE=/root/.stash/config.yml
+EXPOSE 9999
+ENTRYPOINT ["stash"]
