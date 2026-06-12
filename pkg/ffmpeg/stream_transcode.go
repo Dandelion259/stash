@@ -12,6 +12,7 @@ import (
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/strm"
 )
 
 type StreamFormat struct {
@@ -205,7 +206,7 @@ func (o TranscodeOptions) makeStreamArgs(sm *StreamManager) Args {
 		args = args.Seek(o.StartTime)
 	}
 
-	args = args.Input(o.VideoFile.Path)
+	args = args.Input(strm.Resolve(o.VideoFile.Path))
 
 	videoOnly := ProbeAudioCodec(o.VideoFile.AudioCodec) == MissingUnsupported
 

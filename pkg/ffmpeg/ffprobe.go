@@ -16,6 +16,7 @@ import (
 	stashExec "github.com/stashapp/stash/pkg/exec"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
+	"github.com/stashapp/stash/pkg/strm"
 )
 
 const minimumFFProbeVersion = 5
@@ -285,13 +286,19 @@ func parse(filePath string, probeJSON *FFProbeJSON) (*VideoFile, error) {
 	result.Container = probeJSON.Format.FormatName
 	duration, _ := strconv.ParseFloat(probeJSON.Format.Duration, 64)
 	result.FileDuration = math.Round(duration*100) / 100
-	fileStat, err := os.Stat(filePath)
-	if err != nil {
-		statErr := fmt.Errorf("error statting file <%s>: %w", filePath, err)
-		logger.Errorf("%v", statErr)
-		return nil, statErr
+	if strm.IsRemoteURL(filePath) {
+		// Remote inputs (.strm targets) cannot be statted; use the size
+		// reported by ffprobe (0 if the origin did not provide one).
+		result.Size, _ = strconv.ParseInt(probeJSON.Format.Size, 10, 64)
+	} else {
+		fileStat, err := os.Stat(filePath)
+		if err != nil {
+			statErr := fmt.Errorf("error statting file <%s>: %w", filePath, err)
+			logger.Errorf("%v", statErr)
+			return nil, statErr
+		}
+		result.Size = fileStat.Size()
 	}
-	result.Size = fileStat.Size()
 	result.StartTime, _ = strconv.ParseFloat(probeJSON.Format.StartTime, 64)
 	result.CreationTime = probeJSON.Format.Tags.CreationTime.Time
 
@@ -336,6 +343,7 @@ func parse(filePath string, probeJSON *FFProbeJSON) (*VideoFile, error) {
 			result.Height = videoStream.Width
 		}
 
+		var err error
 		result.VideoStreamDuration, err = strconv.ParseFloat(videoStream.Duration, 64)
 		if err != nil {
 			// Revert to the historical behaviour, which is still correct in the vast majority of cases.

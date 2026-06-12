@@ -8,6 +8,7 @@ import (
 	"github.com/stashapp/stash/pkg/ffmpeg"
 	"github.com/stashapp/stash/pkg/file"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/strm"
 )
 
 // Decorator adds video specific fields to a File.
@@ -21,20 +22,26 @@ func (d *Decorator) Decorate(ctx context.Context, fs models.FS, f models.File) (
 	}
 
 	base := f.Base()
+
+	// For .strm files the input handed to ffprobe is the URL inside the file,
+	// not the local path. The local .strm file remains the file's identity.
+	probeInput := strm.Resolve(base.Path)
+	isStrm := strm.IsStrmPath(base.Path)
+
 	// TODO - copy to temp file if not an OsFS
-	if _, isOs := fs.(*file.OsFS); !isOs {
+	if _, isOs := fs.(*file.OsFS); !isOs && !isStrm {
 		return f, fmt.Errorf("video.constructFile: only OsFS is supported")
 	}
 
 	probe := d.FFProbe
-	videoFile, err := probe.NewVideoFile(base.Path)
+	videoFile, err := probe.NewVideoFile(probeInput)
 	if err != nil {
-		return f, fmt.Errorf("running ffprobe on %q: %w", base.Path, err)
+		return f, fmt.Errorf("running ffprobe on %q: %w", probeInput, err)
 	}
 
-	container, err := ffmpeg.MatchContainer(videoFile.Container, base.Path)
+	container, err := ffmpeg.MatchContainer(videoFile.Container, probeInput)
 	if err != nil {
-		return f, fmt.Errorf("matching container for %q: %w", base.Path, err)
+		return f, fmt.Errorf("matching container for %q: %w", probeInput, err)
 	}
 
 	// check if there is a funscript file

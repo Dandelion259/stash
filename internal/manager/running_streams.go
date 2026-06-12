@@ -13,6 +13,7 @@ import (
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
+	"github.com/stashapp/stash/pkg/strm"
 	"github.com/stashapp/stash/pkg/txn"
 	"github.com/stashapp/stash/pkg/utils"
 )
@@ -49,6 +50,17 @@ func (s *SceneServer) StreamSceneDirect(scene *models.Scene, w http.ResponseWrit
 	sceneHash := scene.GetHash(config.GetInstance().GetVideoFileNamingAlgorithm())
 
 	fp := GetInstance().Paths.Scene.GetStreamPath(scene.Path, sceneHash)
+
+	// If the resolved stream path is a .strm file (i.e. no local transcode was
+	// generated), redirect the player to the URL inside it so it streams
+	// directly from the origin, supporting range requests natively.
+	if strm.IsStrmPath(fp) {
+		if url, err := strm.ReadURL(fp); err == nil && strm.IsRemoteURL(url) {
+			http.Redirect(w, r, url, http.StatusFound)
+			return
+		}
+	}
+
 	streamRequestCtx := ffmpeg.NewStreamRequestContext(w, r)
 
 	// #2579 - hijacking and closing the connection here causes video playback to fail in Safari
