@@ -117,8 +117,9 @@ const ImageWall: React.FC<IImageWallProps> = ({
         image.paths.preview !== ""
           ? image.paths.preview!
           : image.paths.thumbnail!,
-      width: image.visual_files?.[0]?.width ?? 0,
-      height: image.visual_files?.[0]?.height ?? 0,
+      // pictures in lazy zip galleries are 0x0 until first shown: lay them out square
+      width: image.visual_files?.[0]?.width || 1,
+      height: image.visual_files?.[0]?.height || 1,
       tabIndex: index,
       key: image.id,
       loading: "lazy",

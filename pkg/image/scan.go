@@ -100,7 +100,9 @@ func (h *ScanHandler) Handle(ctx context.Context, f models.File, oldFile models.
 		return fmt.Errorf("finding existing image: %w", err)
 	}
 
-	if len(existing) == 0 {
+	// a picture in a lazy zip gallery has no fingerprints yet: matching on none would
+	// match every image
+	if len(existing) == 0 && len(imageFile.Fingerprints) > 0 {
 		// try also to match file by fingerprints
 		existing, err = h.CreatorUpdater.FindByFingerprints(ctx, imageFile.Fingerprints)
 		if err != nil {

@@ -86,6 +86,33 @@ func (c *fingerprintCalculator) CalculateFingerprints(f *models.BaseFile, o file
 	var ret []models.Fingerprint
 	calculateMD5 := true
 
+	// Lazy zip galleries: a picture inside a zip is registered from the zip's table
+	// of contents alone. Its MD5 is filled in when it is first shown (see
+	// internal/api/lazy_image.go), so the scan never reads its bytes.
+	if f.ZipFileID != nil && !useAsVideo(f.Path) {
+		return nil, nil
+	}
+
+	// A zip gets an oshash (64 KB from each end) instead of an MD5 over the whole
+	// file. A zip scanned before this keeps its MD5 until it changes.
+	if isZip(f.Path) {
+		if useExisting {
+			if fp := f.Fingerprints.For(models.FingerprintTypeOshash); fp != nil {
+				return []models.Fingerprint{*fp}, nil
+			}
+			if f.Fingerprints.For(models.FingerprintTypeMD5) != nil {
+				return f.Fingerprints, nil
+			}
+		}
+
+		fp, err := c.calculateOshash(f, o)
+		if err != nil {
+			return nil, err
+		}
+
+		return []models.Fingerprint{*fp}, nil
+	}
+
 	if useAsVideo(f.Path) {
 		var (
 			fp  *models.Fingerprint

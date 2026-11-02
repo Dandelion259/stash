@@ -52,12 +52,15 @@ func (rs imageRoutes) Thumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	defer fillLazyImage(img.Files.Primary())
+
 	mgr := manager.GetInstance()
 	filepath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
 
 	// if the thumbnail doesn't exist, encode on the fly
+	// (a lazy zip picture has no checksum yet, so no thumbnail path of its own)
 	exists, _ := fsutil.FileExists(filepath)
-	if exists {
+	if exists && img.Checksum != "" {
 		if modTime == nil {
 			utils.ServeStaticFile(w, r, filepath)
 		} else {
@@ -103,7 +106,7 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 		}
 
 		// write the generated thumbnail to disk if enabled
-		if manager.GetInstance().Config.IsWriteImageThumbnails() {
+		if manager.GetInstance().Config.IsWriteImageThumbnails() && img.Checksum != "" {
 			logger.Debugf("writing thumbnail to disk: %s", img.Path)
 			if err := fsutil.WriteFile(filepath, data); err == nil {
 				utils.ServeStaticFile(w, r, filepath)
@@ -125,6 +128,7 @@ func (rs imageRoutes) Preview(w http.ResponseWriter, r *http.Request) {
 
 func (rs imageRoutes) Image(w http.ResponseWriter, r *http.Request) {
 	i := r.Context().Value(imageKey).(*models.Image)
+	defer fillLazyImage(i.Files.Primary())
 
 	const useDefault = false
 	rs.serveImage(w, r, i, useDefault)

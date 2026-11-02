@@ -42,13 +42,12 @@ func (d *Decorator) Decorate(ctx context.Context, fs models.FS, f models.File) (
 			return nil, fmt.Errorf("%w: %s", ErrUnsupportedAVIFInZip, base.Path)
 		}
 
-		// Go cannot decode JXL from a stream, so extract to a temp file and probe by path
-		if ext == ".jxl" {
-			return d.decorateViaTempFile(fs, f)
-		}
-
-		logger.Debugf("assuming ImageFile for non-OsFS file %q", base.Path)
-		return decorateFallback(fs, f)
+		// Lazy zip galleries: the picture is not opened during the scan. Width and
+		// height stay 0 until it is first shown, then DecorateZipMember fills them.
+		return &models.ImageFile{
+			BaseFile: base,
+			Format:   formatFromExt(ext),
+		}, nil
 	}
 
 	probe, err := d.FFProbe.NewVideoFile(base.Path)
@@ -108,6 +107,30 @@ func (d *Decorator) Decorate(ctx context.Context, fs models.FS, f models.File) (
 	adjustForOrientation(fs, base.Path, ret)
 
 	return ret, nil
+}
+
+// DecorateZipMember reads the format, width and height of a picture inside a zip
+// (fs is the opened zip). The scan leaves these unset; see Decorate.
+func (d *Decorator) DecorateZipMember(fs models.FS, f models.File) (models.File, error) {
+	// Go cannot decode JXL from a stream, so extract to a temp file and probe by path
+	if strings.ToLower(filepath.Ext(f.Base().Path)) == ".jxl" {
+		return d.decorateViaTempFile(fs, f)
+	}
+
+	return decorateFallback(fs, f)
+}
+
+// formatFromExt gives the format name image.DecodeConfig / ffprobe would report for
+// a picture with this extension.
+func formatFromExt(ext string) string {
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "jpeg"
+	case ".jxl":
+		return "jpegxl"
+	default:
+		return strings.TrimPrefix(ext, ".")
+	}
 }
 
 func decodeConfig(fs models.FS, path string) (config image.Config, format string, err error) {

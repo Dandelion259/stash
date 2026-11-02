@@ -807,6 +807,10 @@ func (s *Scanner) onExistingFile(ctx context.Context, f ScannedFile, existing mo
 	fingerprintChanged := fp.ContentsChanged(oldFingerprints)
 
 	s.removeOutdatedFingerprints(existing, fp)
+	if len(fp) == 0 {
+		// lazy zip picture: its old fingerprints describe the old contents
+		base.Fingerprints = nil
+	}
 	existing.SetFingerprints(fp)
 
 	existing, err = s.fireDecorators(ctx, f.FS, existing)

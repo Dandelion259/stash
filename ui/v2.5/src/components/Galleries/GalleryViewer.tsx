@@ -67,8 +67,9 @@ export const GalleryViewer: React.FC<IProps> = ({ galleryId }) => {
   images.forEach((image, index) => {
     const imageData = {
       src: image.paths.thumbnail!,
-      width: image.visual_files[0]?.width ?? 0,
-      height: image.visual_files[0]?.height ?? 0,
+      // pictures in lazy zip galleries are 0x0 until first shown: lay them out square
+      width: image.visual_files[0]?.width || 1,
+      height: image.visual_files[0]?.height || 1,
       tabIndex: index,
       key: image.id ?? index,
       loading: "lazy",
