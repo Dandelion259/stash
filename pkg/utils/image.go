@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -16,9 +15,26 @@ import (
 // configurable at some point.
 const imageGetTimeout = time.Second * 60
 
-const base64RE = `^data:.+\/(.+);base64,(.*)$`
-
-var base64Regex = regexp.MustCompile(base64RE)
+// base64DataURI returns the data of a base64 data URI. It matches like
+// `^data:.+\/(.+);base64,(.*)$` did, without a regexp: on an image of a few
+// hundred KiB the regexp took 40-80 ms, and scene covers are processed inside
+// the write transaction, where every other write waits for it.
+func base64DataURI(s string) (string, bool) {
+	const prefix, marker = "data:", ";base64,"
+	// "." does not match a newline
+	if !strings.HasPrefix(s, prefix) || strings.IndexByte(s, '\n') >= 0 {
+		return "", false
+	}
+	i := strings.LastIndex(s, marker)
+	if i < 0 {
+		return "", false
+	}
+	// a slash with at least one character before and after it
+	if strings.LastIndexByte(s[:i-1], '/') < len(prefix)+1 {
+		return "", false
+	}
+	return s[i+len(marker):], true
+}
 
 // ProcessImageInput transforms an image string either from a base64 encoded
 // string, or from a URL, and returns the image as a byte slice
@@ -27,7 +43,7 @@ func ProcessImageInput(ctx context.Context, imageInput string) ([]byte, error) {
 		return []byte{}, nil
 	}
 
-	if base64Regex.MatchString(imageInput) {
+	if _, ok := base64DataURI(imageInput); ok {
 		d, err := ProcessBase64Image(imageInput)
 		return d, err
 	}
@@ -111,11 +127,8 @@ func ProcessBase64Image(imageString string) ([]byte, error) {
 		return nil, fmt.Errorf("empty image string")
 	}
 
-	matches := base64Regex.FindStringSubmatch(imageString)
-	var encodedString string
-	if len(matches) > 2 {
-		encodedString = matches[2]
-	} else {
+	encodedString, ok := base64DataURI(imageString)
+	if !ok {
 		encodedString = imageString
 	}
 	imageData, err := GetDataFromBase64String(encodedString)

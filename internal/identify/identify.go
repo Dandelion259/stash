@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
@@ -178,20 +180,43 @@ func (t *SceneIdentifier) getOptions(source ScraperSource) MetadataOptions {
 	return options
 }
 
-func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, result *scrapeResult) (*scene.UpdateSet, error) {
-	ret := &scene.UpdateSet{
-		ID: s.ID,
-	}
-
+// getFieldOptions returns the field options of the source, falling back to the default options
+func (t *SceneIdentifier) getFieldOptions(source ScraperSource) map[string]*FieldOptions {
 	allOptions := []MetadataOptions{}
-	if result.source.Options != nil {
-		allOptions = append(allOptions, *result.source.Options)
+	if source.Options != nil {
+		allOptions = append(allOptions, *source.Options)
 	}
 	if t.DefaultOptions != nil {
 		allOptions = append(allOptions, *t.DefaultOptions)
 	}
 
-	fieldOptions := getFieldOptions(allOptions)
+	return getFieldOptions(allOptions)
+}
+
+// allowedPerformerGenders returns the genders of the performers to add to a scene.
+// nil means include all performers.
+func allowedPerformerGenders(options MetadataOptions) []models.GenderEnum {
+	var allowedGenders []models.GenderEnum
+	if len(options.PerformerGenders) > 0 {
+		// New field takes precedence
+		allowedGenders = options.PerformerGenders
+	} else if options.IncludeMalePerformers != nil && !*options.IncludeMalePerformers {
+		// Legacy: if includeMalePerformers is false, include all genders except male
+		for _, g := range models.AllGenderEnum {
+			if g != models.GenderEnumMale {
+				allowedGenders = append(allowedGenders, g)
+			}
+		}
+	}
+	return allowedGenders
+}
+
+func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, result *scrapeResult) (*scene.UpdateSet, error) {
+	ret := &scene.UpdateSet{
+		ID: s.ID,
+	}
+
+	fieldOptions := t.getFieldOptions(result.source)
 	options := t.getOptions(result.source)
 
 	scraped := result.result
@@ -219,23 +244,8 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 		ret.Partial.StudioID = models.NewOptionalInt(*studioID)
 	}
 
-	// Determine allowed genders for performer filtering
-	var allowedGenders []models.GenderEnum
-	if len(options.PerformerGenders) > 0 {
-		// New field takes precedence
-		allowedGenders = options.PerformerGenders
-	} else if options.IncludeMalePerformers != nil && !*options.IncludeMalePerformers {
-		// Legacy: if includeMalePerformers is false, include all genders except male
-		for _, g := range models.AllGenderEnum {
-			if g != models.GenderEnumMale {
-				allowedGenders = append(allowedGenders, g)
-			}
-		}
-	}
-	// nil allowedGenders means include all performers
-
 	addSkipSingleNamePerformerTag := false
-	performerIDs, err := rel.performers(ctx, allowedGenders)
+	performerIDs, err := rel.performers(ctx, allowedPerformerGenders(options))
 	if err != nil {
 		if errors.Is(err, ErrSkipSingleNamePerformer) {
 			addSkipSingleNamePerformerTag = true
@@ -294,7 +304,42 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 	return ret, nil
 }
 
+// preloadPerformerImages downloads the images of the scraped performers that
+// will be created for the scene, before the write transaction: only one write
+// runs at a time, so a download inside it holds up every other scene being
+// identified. A failed download is left to createMissingPerformer, as before.
+func (t *SceneIdentifier) preloadPerformerImages(ctx context.Context, result *scrapeResult) {
+	fieldStrategy := t.getFieldOptions(result.source)["performers"]
+	if fieldStrategy == nil || !utils.IsTrue(fieldStrategy.CreateMissing) || !shouldSetSingleValueField(fieldStrategy, false) {
+		return
+	}
+
+	options := t.getOptions(result.source)
+	allowedGenders := allowedPerformerGenders(options)
+	skipSingleName := utils.IsTrue(options.SkipSingleNamePerformers)
+
+	for _, p := range result.result.Performers {
+		if p.StoredID != nil || p.Name == nil || len(p.Images) == 0 || strings.HasPrefix(p.Images[0], "data:") {
+			continue
+		}
+		if allowedGenders != nil && p.Gender != nil && !slices.Contains(allowedGenders, models.GenderEnum(strings.ToUpper(*p.Gender))) {
+			continue
+		}
+		if skipSingleName && !strings.Contains(*p.Name, " ") && (p.Disambiguation == nil || len(*p.Disambiguation) == 0) {
+			continue
+		}
+
+		data, err := utils.ProcessImageInput(ctx, p.Images[0])
+		if err != nil {
+			continue
+		}
+		p.Images[0] = "data:" + http.DetectContentType(data) + ";base64," + utils.GetBase64StringFromData(data)
+	}
+}
+
 func (t *SceneIdentifier) modifyScene(ctx context.Context, s *models.Scene, result *scrapeResult) error {
+	t.preloadPerformerImages(ctx, result)
+
 	var updater *scene.UpdateSet
 	if err := txn.WithTxn(ctx, t.TxnManager, func(ctx context.Context) error {
 		// load scene relationships

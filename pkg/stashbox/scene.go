@@ -157,7 +157,7 @@ func (c Client) findScenesByFingerprints(ctx context.Context, scenes [][]*graphq
 
 // coverFetchConcurrency is how many scene covers are downloaded at once when
 // converting a batch of fingerprint results.
-const coverFetchConcurrency = 8
+const coverFetchConcurrency = 16
 
 // sceneFragmentsToScrapedScenes converts a batch of fingerprint results,
 // downloading the scene covers concurrently. The output has the same shape as

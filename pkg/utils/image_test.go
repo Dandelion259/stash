@@ -1,10 +1,15 @@
 package utils
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // a minimal valid 1x1 PNG
@@ -93,5 +98,65 @@ func TestValidateImageData(t *testing.T) {
 				t.Errorf("validateImageData() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestBase64DataURI_matchesRegexp(t *testing.T) {
+	re := regexp.MustCompile(`^data:.+\/(.+);base64,(.*)$`)
+	big := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(make([]byte, 300*1024))
+	inputs := []string{
+		big,
+		"data:image/png;base64,iVBORw0KGgo=",
+		"data:image/svg+xml;base64,PHN2Zz4=",
+		"data:text/plain; charset=utf-8;base64,aGk=",
+		"data:image/png;base64,",
+		"data:image/;base64,aGk=",
+		"data:/png;base64,aGk=",
+		"data:a/b;base64,aGk=",
+		"data:/;base64,aGk=",
+		"data:ab;base64,aGk=",
+		"data:image/png;base64,a;base64,b",
+		"data:image;base64,a/b;base64,c",
+		"data:image/png;base64,aG\nk=",
+		"data:image/png;base64",
+		"data:image/png,aGk=",
+		"DATA:image/png;base64,aGk=",
+		"https://example.com/image.jpg",
+		"https://example.com/data:image/png;base64,x",
+		"",
+		"data:",
+	}
+	for _, in := range inputs {
+		name := in
+		if len(name) > 60 {
+			name = name[:60]
+		}
+		got, ok := base64DataURI(in)
+		m := re.FindStringSubmatch(in)
+		if ok != (m != nil) {
+			t.Errorf("%q: match %v, regexp %v", name, ok, m != nil)
+			continue
+		}
+		if ok && got != m[2] {
+			t.Errorf("%q: data %q, regexp %q", name, got, m[2])
+		}
+	}
+}
+
+func TestProcessBase64Image_largeImageIsFast(t *testing.T) {
+	img := append(append([]byte{}, pngImage...), make([]byte, 400*1024)...)
+	in := "data:image/png;base64," + base64.StdEncoding.EncodeToString(img)
+
+	start := time.Now()
+	got, err := ProcessImageInput(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, img) {
+		t.Fatal("decoded image differs")
+	}
+	// the regexp took 40-80 ms here, the decode takes about 1 ms
+	if d := time.Since(start); d > 20*time.Millisecond {
+		t.Errorf("400 KiB data URI took %v", d)
 	}
 }

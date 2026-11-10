@@ -3,6 +3,8 @@ package identify
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strconv"
@@ -919,4 +921,43 @@ func TestSceneIdentifier_modifyScene_rematchesInsideWrite(t *testing.T) {
 		assert.Error(t, tr.modifyScene(testCtx, newScene(), newResult()))
 		db.AssertExpectations(t)
 	})
+}
+
+func TestSceneIdentifier_preloadPerformerImages(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write(png)
+	}))
+	defer srv.Close()
+
+	str := func(s string) *string { return &s }
+	createMissing := true
+	includeMale := false
+	performer := func(name string, gender string) *models.ScrapedPerformer {
+		return &models.ScrapedPerformer{Name: str(name), Gender: str(gender), Images: []string{srv.URL + "/" + name}}
+	}
+	newOne := performer("New Performer", "FEMALE")
+	existing := performer("Existing Performer", "FEMALE")
+	existing.StoredID = str("1")
+	male := performer("Male Performer", "MALE")
+
+	identifier := SceneIdentifier{
+		DefaultOptions: &MetadataOptions{
+			FieldOptions:          []*FieldOptions{{Field: "performers", Strategy: FieldStrategyMerge, CreateMissing: &createMissing}},
+			IncludeMalePerformers: &includeMale,
+		},
+	}
+	result := &scrapeResult{result: &models.ScrapedScene{Performers: []*models.ScrapedPerformer{newOne, existing, male}}}
+
+	identifier.preloadPerformerImages(testCtx, result)
+
+	assert.Equal(t, 1, requests, "only the performer that will be created is downloaded")
+	img, err := newOne.GetImage(testCtx, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, png, img)
+	assert.Equal(t, srv.URL+"/Existing Performer", existing.Images[0])
+	assert.Equal(t, srv.URL+"/Male Performer", male.Images[0])
+	assert.Equal(t, 1, requests, "GetImage uses the preloaded image")
 }
