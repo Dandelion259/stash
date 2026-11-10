@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
@@ -120,14 +121,14 @@ func (c Client) findScenesByFingerprints(ctx context.Context, scenes [][]*graphq
 			return nil, err
 		}
 
-		for _, sceneFragments := range scenes.FindScenesBySceneFingerprints {
-			var sceneResults []*models.ScrapedScene
-			for _, scene := range sceneFragments {
-				ss, err := c.sceneFragmentToScrapedScene(ctx, scene)
-				if err != nil {
-					return nil, err
-				}
+		converted, err := c.sceneFragmentsToScrapedScenes(ctx, scenes.FindScenesBySceneFingerprints)
+		if err != nil {
+			return nil, err
+		}
 
+		for _, sceneFragments := range converted {
+			var sceneResults []*models.ScrapedScene
+			for _, ss := range sceneFragments {
 				var thisIgnoredTags []string
 				ss.Tags, thisIgnoredTags = scraper.FilterTags(c.excludeTagRE, ss.Tags)
 				ignoredTags = sliceutil.AppendUniques(ignoredTags, thisIgnoredTags)
@@ -148,6 +149,45 @@ func (c Client) findScenesByFingerprints(ctx context.Context, scenes [][]*graphq
 		if len(v) > 0 {
 			ret[i] = results[upTo]
 			upTo++
+		}
+	}
+
+	return ret, nil
+}
+
+// coverFetchConcurrency is how many scene covers are downloaded at once when
+// converting a batch of fingerprint results.
+const coverFetchConcurrency = 8
+
+// sceneFragmentsToScrapedScenes converts a batch of fingerprint results,
+// downloading the scene covers concurrently. The output has the same shape as
+// the input.
+func (c Client) sceneFragmentsToScrapedScenes(ctx context.Context, batch [][]*graphql.SceneFragment) ([][]*models.ScrapedScene, error) {
+	ret := make([][]*models.ScrapedScene, len(batch))
+	errs := make([][]error, len(batch))
+	sem := make(chan struct{}, coverFetchConcurrency)
+	var wg sync.WaitGroup
+
+	for i, fragments := range batch {
+		ret[i] = make([]*models.ScrapedScene, len(fragments))
+		errs[i] = make([]error, len(fragments))
+		for j, fragment := range fragments {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				ret[i][j], errs[i][j] = c.sceneFragmentToScrapedScene(ctx, fragment)
+			}()
+		}
+	}
+	wg.Wait()
+
+	for _, e := range errs {
+		for _, err := range e {
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

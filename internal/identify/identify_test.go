@@ -825,3 +825,98 @@ func Test_shouldSetSingleValueField(t *testing.T) {
 		})
 	}
 }
+
+// fakeMatcher links every unmatched scraped performer to an existing
+// performer, as if another scene had created it after this one was scraped.
+type fakeMatcher struct {
+	storedID  string
+	endpoints []string
+	err       error
+}
+
+func (m *fakeMatcher) MatchRelationships(ctx context.Context, s *models.ScrapedScene, endpoint string) error {
+	m.endpoints = append(m.endpoints, endpoint)
+	if m.err != nil {
+		return m.err
+	}
+	for _, p := range s.Performers {
+		if p.StoredID == nil {
+			p.StoredID = &m.storedID
+		}
+	}
+	return nil
+}
+
+func TestSceneIdentifier_modifyScene_rematchesInsideWrite(t *testing.T) {
+	const endpoint = "https://stashdb.org/graphql"
+	boolFalse := false
+	boolTrue := true
+	options := &MetadataOptions{
+		SetOrganized:  &boolFalse,
+		SetCoverImage: &boolFalse,
+		FieldOptions: []*FieldOptions{{
+			Field:         "performers",
+			Strategy:      FieldStrategyMerge,
+			CreateMissing: &boolTrue,
+		}},
+	}
+	newScene := func() *models.Scene {
+		return &models.Scene{
+			ID:           1,
+			URLs:         models.NewRelatedStrings([]string{}),
+			PerformerIDs: models.NewRelatedIDs([]int{}),
+			TagIDs:       models.NewRelatedIDs([]int{}),
+			StashIDs:     models.NewRelatedStashIDs([]models.StashID{}),
+		}
+	}
+	newResult := func() *scrapeResult {
+		name := "New Performer"
+		remoteID := "remote-performer"
+		return &scrapeResult{
+			result: &models.ScrapedScene{
+				Performers: []*models.ScrapedPerformer{{Name: &name, RemoteSiteID: &remoteID}},
+			},
+			source: ScraperSource{Options: options, RemoteSite: endpoint},
+		}
+	}
+
+	t.Run("performer created meanwhile is linked, not created again", func(t *testing.T) {
+		db := mocks.NewDatabase()
+		// no Performer.Create expectation: creating one fails the test
+		db.Scene.On("UpdatePartial", mock.Anything, 1, mock.MatchedBy(func(p models.ScenePartial) bool {
+			return p.PerformerIDs != nil && slices.Equal(p.PerformerIDs.IDs, []int{5})
+		})).Return(nil, nil).Once()
+
+		m := &fakeMatcher{storedID: "5"}
+		tr := &SceneIdentifier{
+			TxnManager:                  db,
+			SceneReaderUpdater:          db.Scene,
+			StudioReaderWriter:          db.Studio,
+			PerformerCreator:            db.Performer,
+			TagFinderCreator:            db.Tag,
+			DefaultOptions:              options,
+			SceneUpdatePostHookExecutor: mockHookExecutor{},
+			Matcher:                     m,
+		}
+
+		assert.NoError(t, tr.modifyScene(testCtx, newScene(), newResult()))
+		assert.Equal(t, []string{endpoint}, m.endpoints)
+		db.AssertExpectations(t)
+	})
+
+	t.Run("matcher error aborts the update", func(t *testing.T) {
+		db := mocks.NewDatabase()
+		tr := &SceneIdentifier{
+			TxnManager:         db,
+			SceneReaderUpdater: db.Scene,
+			StudioReaderWriter: db.Studio,
+			PerformerCreator:   db.Performer,
+			TagFinderCreator:   db.Tag,
+			DefaultOptions:     options,
+			Matcher:            &fakeMatcher{err: errors.New("db gone")},
+		}
+
+		assert.Error(t, tr.modifyScene(testCtx, newScene(), newResult()))
+		db.AssertExpectations(t)
+	})
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/stashapp/stash/internal/identify"
 	"github.com/stashapp/stash/pkg/job"
@@ -64,9 +65,10 @@ func (j *IdentifyJob) Execute(ctx context.Context, progress *job.Progress) error
 		}
 
 		progress.SetTotal(len(sceneIDs))
+		var batch []*models.Scene
 		for _, id := range sceneIDs {
 			if job.IsCancelled(ctx) {
-				break
+				return nil
 			}
 
 			// find the scene
@@ -80,9 +82,14 @@ func (j *IdentifyJob) Execute(ctx context.Context, progress *job.Progress) error
 				return fmt.Errorf("scene with id %d not found", id)
 			}
 
-			j.identifyScene(ctx, scene, sources)
+			batch = append(batch, scene)
+			if len(batch) == identifyBatchSize {
+				j.identifyBatch(ctx, batch, sources)
+				batch = nil
+			}
 		}
 
+		j.identifyBatch(ctx, batch, sources)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("error encountered while identifying scenes: %w", err)
@@ -120,14 +127,77 @@ func (j *IdentifyJob) identifyAllScenes(ctx context.Context, sources []identify.
 
 	j.progress.SetTotal(countResult.Count)
 
-	return scene.BatchProcess(ctx, r.Scene, sceneFilter, findFilter, func(scene *models.Scene) error {
+	var batch []*models.Scene
+	if err := scene.BatchProcess(ctx, r.Scene, sceneFilter, findFilter, func(scene *models.Scene) error {
 		if job.IsCancelled(ctx) {
 			return nil
 		}
 
-		j.identifyScene(ctx, scene, sources)
+		batch = append(batch, scene)
+		if len(batch) == identifyBatchSize {
+			j.identifyBatch(ctx, batch, sources)
+			batch = nil
+		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	j.identifyBatch(ctx, batch, sources)
+	return nil
+}
+
+const (
+	// identifyBatchSize is the number of scenes looked up with one stash-box
+	// fingerprint query (the most stash-box accepts per query).
+	identifyBatchSize = 40
+	// identifyWorkers is the number of scenes identified at the same time.
+	// Database writes stay serial; the scraping and the scene update plugin
+	// hooks run in parallel.
+	identifyWorkers = 4
+)
+
+// identifyBatch looks the scenes up on the stash-box sources with one query
+// per source, then identifies them with identifyWorkers workers.
+func (j *IdentifyJob) identifyBatch(ctx context.Context, scenes []*models.Scene, sources []identify.ScraperSource) {
+	if len(scenes) == 0 || job.IsCancelled(ctx) {
+		return
+	}
+
+	prefetchStashBoxes(ctx, scenes, sources)
+
+	work := make(chan *models.Scene)
+	var wg sync.WaitGroup
+	for range identifyWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for s := range work {
+				j.identifyScene(ctx, s, sources)
+			}
+		}()
+	}
+
+	for _, s := range scenes {
+		work <- s
+	}
+	close(work)
+	wg.Wait()
+}
+
+// prefetchStashBoxes queries the stash-box sources in order, each for the
+// scenes the sources before it did not match (identify uses the first source
+// that matches). It stops at the first non stash-box source; the remaining
+// sources are queried per scene as before.
+func prefetchStashBoxes(ctx context.Context, scenes []*models.Scene, sources []identify.ScraperSource) {
+	pending := scenes
+	for _, src := range sources {
+		sb, ok := src.Scraper.(stashboxSource)
+		if !ok || len(pending) == 0 || job.IsCancelled(ctx) {
+			return
+		}
+		pending = sb.prefetch(ctx, pending)
+	}
 }
 
 func (j *IdentifyJob) identifyScene(ctx context.Context, s *models.Scene, sources []identify.ScraperSource) {
@@ -148,6 +218,7 @@ func (j *IdentifyJob) identifyScene(ctx context.Context, s *models.Scene, source
 			DefaultOptions:              j.input.Options,
 			Sources:                     sources,
 			SceneUpdatePostHookExecutor: j.postHookExecutor,
+			Matcher:                     newRelationshipMatcher(),
 		}
 
 		taskError = task.Identify(ctx, s)
@@ -171,12 +242,6 @@ func (j *IdentifyJob) getSources() ([]identify.ScraperSource, error) {
 
 		var src identify.ScraperSource
 		if stashBox != nil {
-			matcher := match.SceneRelationships{
-				PerformerFinder: instance.Repository.Performer,
-				TagFinder:       instance.Repository.Tag,
-				StudioFinder:    instance.Repository.Studio,
-			}
-
 			src = identify.ScraperSource{
 				Name: "stash-box: " + stashBox.Endpoint,
 				Scraper: stashboxSource{
@@ -184,7 +249,8 @@ func (j *IdentifyJob) getSources() ([]identify.ScraperSource, error) {
 					endpoint:               stashBox.Endpoint,
 					txnManager:             instance.Repository.TxnManager,
 					sceneFingerprintGetter: instance.SceneService,
-					matcher:                matcher,
+					matcher:                newRelationshipMatcher(),
+					prefetched:             &prefetchedResults{m: map[int][]*models.ScrapedScene{}},
 				},
 				RemoteSite: stashBox.Endpoint,
 			}
@@ -261,25 +327,92 @@ type stashboxSource struct {
 	txnManager             models.TxnManager
 	sceneFingerprintGetter sceneFingerprintGetter
 	matcher                match.SceneRelationships
+
+	// results of the batched fingerprint query, by scene ID
+	prefetched *prefetchedResults
+}
+
+func newRelationshipMatcher() match.SceneRelationships {
+	return match.SceneRelationships{
+		PerformerFinder: instance.Repository.Performer,
+		TagFinder:       instance.Repository.Tag,
+		StudioFinder:    instance.Repository.Studio,
+	}
+}
+
+type prefetchedResults struct {
+	mu sync.Mutex
+	m  map[int][]*models.ScrapedScene
+}
+
+// take returns and forgets the prefetched results of a scene. ok is false if
+// the scene was not prefetched.
+func (p *prefetchedResults) take(sceneID int) (results []*models.ScrapedScene, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	results, ok = p.m[sceneID]
+	delete(p.m, sceneID)
+	return results, ok
 }
 
 type sceneFingerprintGetter interface {
 	GetScenesFingerprints(ctx context.Context, ids []int) ([]models.Fingerprints, error)
 }
 
-func (s stashboxSource) ScrapeScenes(ctx context.Context, sceneID int) ([]*models.ScrapedScene, error) {
+// prefetch looks the scenes up with one fingerprint query and keeps the
+// results for ScrapeScenes. It returns the scenes without a match. On error
+// nothing is kept and ScrapeScenes queries per scene.
+func (s stashboxSource) prefetch(ctx context.Context, scenes []*models.Scene) []*models.Scene {
+	ids := make([]int, len(scenes))
+	for i, sc := range scenes {
+		ids[i] = sc.ID
+	}
+
 	var fps []models.Fingerprints
 	if err := txn.WithReadTxn(ctx, s.txnManager, func(ctx context.Context) error {
 		var err error
-		fps, err = s.sceneFingerprintGetter.GetScenesFingerprints(ctx, []int{sceneID})
+		fps, err = s.sceneFingerprintGetter.GetScenesFingerprints(ctx, ids)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("error getting scene fingerprints: %w", err)
+		logger.Warnf("Identify: getting fingerprints for batch lookup on %s: %v", s.endpoint, err)
+		return scenes
 	}
 
-	results, err := s.FindSceneByFingerprints(ctx, fps[0])
-	if err != nil {
-		return nil, fmt.Errorf("error querying stash-box using scene ID %d: %w", sceneID, err)
+	results, err := s.FindScenesByFingerprints(ctx, fps)
+	if err != nil || len(results) != len(scenes) {
+		logger.Warnf("Identify: batch lookup on %s failed, querying per scene: %v", s.endpoint, err)
+		return scenes
+	}
+
+	var unmatched []*models.Scene
+	s.prefetched.mu.Lock()
+	defer s.prefetched.mu.Unlock()
+	for i, sc := range scenes {
+		s.prefetched.m[sc.ID] = results[i]
+		if len(results[i]) == 0 {
+			unmatched = append(unmatched, sc)
+		}
+	}
+	return unmatched
+}
+
+func (s stashboxSource) ScrapeScenes(ctx context.Context, sceneID int) ([]*models.ScrapedScene, error) {
+	results, ok := s.prefetched.take(sceneID)
+	if !ok {
+		var fps []models.Fingerprints
+		if err := txn.WithReadTxn(ctx, s.txnManager, func(ctx context.Context) error {
+			var err error
+			fps, err = s.sceneFingerprintGetter.GetScenesFingerprints(ctx, []int{sceneID})
+			return err
+		}); err != nil {
+			return nil, fmt.Errorf("error getting scene fingerprints: %w", err)
+		}
+
+		var err error
+		results, err = s.FindSceneByFingerprints(ctx, fps[0])
+		if err != nil {
+			return nil, fmt.Errorf("error querying stash-box using scene ID %d: %w", sceneID, err)
+		}
 	}
 
 	if err := txn.WithReadTxn(ctx, s.txnManager, func(ctx context.Context) error {

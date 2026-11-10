@@ -38,6 +38,12 @@ type SceneUpdatePostHookExecutor interface {
 	ExecuteSceneUpdatePostHooks(ctx context.Context, input models.SceneUpdateInput, inputFields []string)
 }
 
+// RelationshipMatcher links scraped studios, performers and tags to existing
+// database objects.
+type RelationshipMatcher interface {
+	MatchRelationships(ctx context.Context, s *models.ScrapedScene, endpoint string) error
+}
+
 type ScraperSource struct {
 	Name       string
 	Options    *MetadataOptions
@@ -55,6 +61,12 @@ type SceneIdentifier struct {
 	DefaultOptions              *MetadataOptions
 	Sources                     []ScraperSource
 	SceneUpdatePostHookExecutor SceneUpdatePostHookExecutor
+
+	// Matcher, if set, re-matches the scraped relationships inside the write
+	// transaction. Needed when scenes are identified concurrently: a studio,
+	// performer or tag created by another scene since scraping is then found
+	// instead of being created a second time.
+	Matcher RelationshipMatcher
 }
 
 func (t *SceneIdentifier) Identify(ctx context.Context, scene *models.Scene) error {
@@ -297,6 +309,12 @@ func (t *SceneIdentifier) modifyScene(ctx context.Context, s *models.Scene, resu
 		}
 		if err := s.LoadStashIDs(ctx, t.SceneReaderUpdater); err != nil {
 			return err
+		}
+
+		if t.Matcher != nil {
+			if err := t.Matcher.MatchRelationships(ctx, result.result, result.source.RemoteSite); err != nil {
+				return fmt.Errorf("error matching scene relationships: %w", err)
+			}
 		}
 
 		var err error
