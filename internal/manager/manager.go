@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/remeh/sizedwaitgroup"
@@ -38,7 +39,7 @@ type Manager struct {
 
 	// ImageThumbnailGenerateWaitGroup is the global wait group image thumbnail generation
 	// It uses the parallel tasks setting from the configuration.
-	ImageThumbnailGenerateWaitGroup sizedwaitgroup.SizedWaitGroup
+	ImageThumbnailGenerateWaitGroup atomic.Pointer[sizedwaitgroup.SizedWaitGroup]
 
 	Paths *paths.Paths
 
@@ -116,7 +117,12 @@ func (s *Manager) RefreshConfig() {
 			logger.Warnf("could not create interactive heatmaps directory: %v", err)
 		}
 
-		s.ImageThumbnailGenerateWaitGroup.Size = cfg.GetParallelTasksWithAutoDetection()
+		// A sizedwaitgroup's limit is fixed when it is made (setting .Size later does nothing,
+		// so thumbnails were made one at a time): make a new one when the setting changes.
+		if n := cfg.GetParallelTasksWithAutoDetection(); s.ImageThumbnailGenerateWaitGroup.Load().Size != n {
+			wg := sizedwaitgroup.New(n)
+			s.ImageThumbnailGenerateWaitGroup.Store(&wg)
+		}
 	}
 }
 

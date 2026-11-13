@@ -86,8 +86,6 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 
 		Paths: mgrPaths,
 
-		ImageThumbnailGenerateWaitGroup: sizedwaitgroup.New(1),
-
 		JobManager:      initJobManager(cfg),
 		ReadLockManager: fsutil.NewReadLockManager(),
 
@@ -108,6 +106,8 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 
 		scanSubs: &subscriptionManager{},
 	}
+	thumbWG := sizedwaitgroup.New(1) // resized by RefreshConfig
+	mgr.ImageThumbnailGenerateWaitGroup.Store(&thumbWG)
 
 	if !cfg.IsNewSystem() {
 		logger.Infof("using config file: %s", cfg.GetConfigFile())

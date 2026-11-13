@@ -75,8 +75,16 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 			return
 		}
 
+		// UI setting thumbnailOriginals: send the picture itself (the client scales it) instead
+		// of making a thumbnail here, for pictures up to originalThumbnailMaxBytes.
+		if imf, ok := f.(*models.ImageFile); ok && imf.Size <= originalThumbnailMaxBytes &&
+			mgr.Config.GetUIConfiguration()["thumbnailOriginals"] == true {
+			rs.serveImage(w, r, img, useDefault)
+			return
+		}
+
 		// use the image thumbnail generate wait group to limit the number of concurrent thumbnail generation tasks
-		wg := &mgr.ImageThumbnailGenerateWaitGroup
+		wg := mgr.ImageThumbnailGenerateWaitGroup.Load()
 		wg.Add()
 		defer wg.Done()
 
@@ -87,7 +95,7 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 		}
 
 		encoder := image.NewThumbnailEncoder(manager.GetInstance().FFMpeg, manager.GetInstance().FFProbe, clipPreviewOptions)
-		data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+		data, err := encoder.GetThumbnail(f, thumbnailSize(f))
 		if err != nil {
 			// don't log for unsupported image format
 			// don't log for file not found - can optionally be logged in serveImage
@@ -116,6 +124,25 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 		}
 		utils.ServeStaticContent(w, r, data)
 	}
+}
+
+const originalThumbnailMaxBytes = 2 << 20
+
+// thumbnailSize returns a size a little under DefaultGthumbWidth when the JPEG decoder can
+// shrink the picture to it while decoding (1/2, 1/4, 1/8), else DefaultGthumbWidth: a
+// 2499 px picture at 640 is decoded at 1250 px first, at 624 it is decoded at 624 (half the CPU).
+func thumbnailSize(f models.File) int {
+	imf, ok := f.(*models.ImageFile)
+	if !ok {
+		return models.DefaultGthumbWidth
+	}
+	long := max(imf.Width, imf.Height)
+	for k := 8; k >= 2; k /= 2 {
+		if s := long / k; s >= models.DefaultGthumbWidth*9/10 && s < models.DefaultGthumbWidth {
+			return s
+		}
+	}
+	return models.DefaultGthumbWidth
 }
 
 func (rs imageRoutes) Preview(w http.ResponseWriter, r *http.Request) {
