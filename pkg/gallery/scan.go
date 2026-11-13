@@ -48,7 +48,9 @@ func (h *ScanHandler) Handle(ctx context.Context, f models.File, oldFile models.
 		return fmt.Errorf("finding existing gallery: %w", err)
 	}
 
-	if len(existing) == 0 {
+	// files inside zips have no fingerprints (lazy zip galleries), and an
+	// empty fingerprint list would match every gallery
+	if len(existing) == 0 && len(baseFile.Fingerprints) > 0 {
 		// try also to match file by fingerprints
 		existing, err = h.CreatorUpdater.FindByFingerprints(ctx, baseFile.Fingerprints)
 		if err != nil {

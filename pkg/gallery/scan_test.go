@@ -106,3 +106,28 @@ func TestAssociateExisting_UpdatePartialOnNewFile(t *testing.T) {
 	db.Gallery.AssertCalled(t, "AddFileID", mock.Anything, testGalleryID, models.FileID(newFileID))
 	db.Gallery.AssertCalled(t, "UpdatePartial", mock.Anything, testGalleryID, mock.Anything)
 }
+
+func TestHandle_NoFingerprintsDoesNotMatchAllGalleries(t *testing.T) {
+	const fileID = 300
+
+	// an archive inside a zip: registered without fingerprints, no pictures readable
+	f := &models.BaseFile{ID: models.FileID(fileID), Path: "outer.zip/inner.rar"}
+
+	db := mocks.NewDatabase()
+	db.Gallery.On("FindByFileID", mock.Anything, models.FileID(fileID)).Return([]*models.Gallery{}, nil)
+	db.Image.On("FindByZipFileID", mock.Anything, models.FileID(fileID)).Return([]*models.Image{}, nil)
+
+	h := &ScanHandler{
+		CreatorUpdater:     db.Gallery,
+		ImageFinderUpdater: db.Image,
+		PluginCache:        &plugin.Cache{},
+	}
+
+	db.WithTxnCtx(func(ctx context.Context) {
+		assert.NoError(t, h.Handle(ctx, f, nil))
+	})
+
+	db.Gallery.AssertNotCalled(t, "FindByFingerprints", mock.Anything, mock.Anything)
+	db.Gallery.AssertNotCalled(t, "AddFileID", mock.Anything, mock.Anything, mock.Anything)
+	db.Gallery.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
