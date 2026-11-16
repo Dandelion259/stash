@@ -1,23 +1,24 @@
 # Stash .strm fork — maintenance guide
 
 This checkout is a fork of [stashapp/stash](https://github.com/stashapp/stash)
-that adds native `.strm` file support. All custom work lives in a **single
-commit** on the `strm-support` branch, on top of an upstream release.
+for a library that is streamed from Usenet through the nzbstream mount. The
+custom work is a handful of commits on the `strm-support` branch (pushed as
+`origin/strm-support-develop`), on top of upstream `develop`:
 
-## What the patch does
+| Commit | What it does |
+|---|---|
+| Add .strm file support | `.strm` files (one `http(s)://` URL) are videos: ffprobe/ffmpeg run against the URL, playback is proxied to it |
+| Lazy zip galleries | A picture inside a zip is registered from the zip's table of contents; it is read when first shown |
+| Identify: batch stash-box lookups / no slow work in the write transaction | Identify asks a stash-box for 40 scenes at once and identifies 4 scenes side by side |
+| Gallery scan: empty fingerprint list | Fix for archives inside zips being added to every gallery |
+| Image thumbnails | Made in parallel, cheaper size, optional originals |
+| Images list | Plain count and an index on the date added: the whole Images page opens in 60 ms with 3.7 million pictures |
+| Docker build cache | A rebuild takes about 70 s instead of 9 minutes |
+| registerRelease | nzbstream adds a finished import from a list of its files; nothing walks the folder |
+| registerRelease: identify | The release's scenes are identified per stash-box, a grab's StashDB id is taken, ThePornDB's markers are added |
 
-- `.strm` files (plain text containing one `http(s)://` URL) are treated as
-  videos. `ffprobe`/`ffmpeg` run against the URL inside the file.
-- The scanned scene keeps the `.strm` file as its on-disk identity.
-- Direct playback **302-redirects** the player to the URL (range requests go
-  straight to the origin — e.g. Altmount / NZBDAV). Transcoding feeds the URL
-  to ffmpeg.
-
-Touched files (see `git show strm-support`):
-`pkg/strm/` (new), `internal/manager/manager_tasks.go`,
-`internal/manager/running_streams.go`, `pkg/ffmpeg/ffprobe.go`,
-`pkg/ffmpeg/stream_transcode.go`, `pkg/ffmpeg/stream_segmented.go`,
-`pkg/file/video/scan.go`.
+`FORK-PLAN.md` has the reasons and what was measured for the last four.
+`git log upstream/develop..strm-support` lists the commits.
 
 ## Remotes
 
@@ -38,7 +39,7 @@ One command does fetch + rebase + Docker build. **Target a release tag**, not
 Find the newest tag with:
 `git fetch upstream --tags && git tag -l 'v*' --sort=-version:refname | head`
 
-The script replays **only your .strm commit** onto the chosen ref (it detects
+The script replays **only your commits** onto the chosen ref (it detects
 your commits by author email and uses `git rebase --onto`). This matters because
 upstream release tags and `develop` diverge — a naive `git rebase <tag>` would
 try to replay unrelated upstream commits.
