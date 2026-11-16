@@ -17,7 +17,8 @@ custom work is a handful of commits on the `strm-support` branch (pushed as
 | registerRelease | nzbstream adds a finished import from a list of its files; nothing walks the folder |
 | registerRelease: identify | The release's scenes are identified per stash-box, a grab's StashDB id is taken, ThePornDB's markers are added |
 
-`FORK-PLAN.md` has the reasons and what was measured for the last four.
+`FORK-PLAN.md` (kept in this checkout only, not in the repository) has the
+reasons and what was measured for the last four.
 `git log upstream/develop..strm-support` lists the commits.
 
 ## Remotes
