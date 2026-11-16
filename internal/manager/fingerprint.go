@@ -16,9 +16,19 @@ import (
 
 type fingerprintCalculator struct {
 	Config *config.Config
+
+	// Oshashes are the hashes already known, by file path (registered releases).
+	Oshashes map[string]string
 }
 
 func (c *fingerprintCalculator) calculateOshash(f *models.BaseFile, o file.Opener) (*models.Fingerprint, error) {
+	if hash := c.Oshashes[f.Path]; hash != "" {
+		return &models.Fingerprint{
+			Type:        models.FingerprintTypeOshash,
+			Fingerprint: hash,
+		}, nil
+	}
+
 	// For a .strm, hash the REMOTE video (first+last 64KB via HTTP Range), not the
 	// tiny text file. This yields the same oshash as the real file, so the scene
 	// matches stash-boxes on identify and dedups with the mounted copy. The text

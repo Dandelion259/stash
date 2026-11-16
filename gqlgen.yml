@@ -84,6 +84,12 @@ models:
     model: github.com/stashapp/stash/internal/manager.MigrateInput
   ScanMetadataInput:
     model: github.com/stashapp/stash/internal/manager.ScanMetadataInput
+  RegisterReleaseInput:
+    model: github.com/stashapp/stash/internal/manager.RegisterReleaseInput
+  RegisterReleaseEntryInput:
+    model: github.com/stashapp/stash/internal/manager.RegisterReleaseEntryInput
+  RegisterReleaseResult:
+    model: github.com/stashapp/stash/internal/manager.RegisterReleaseResult
   GenerateMetadataInput:
     model: github.com/stashapp/stash/internal/manager.GenerateMetadataInput
   GeneratePreviewOptionsInput:

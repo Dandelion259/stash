@@ -29,7 +29,7 @@ func (d *Decorator) Decorate(ctx context.Context, fs models.FS, f models.File) (
 	isStrm := strm.IsStrmPath(base.Path)
 
 	// TODO - copy to temp file if not an OsFS
-	if _, isOs := fs.(*file.OsFS); !isOs && !isStrm {
+	if !file.IsOnDisk(fs) && !isStrm {
 		return f, fmt.Errorf("video.constructFile: only OsFS is supported")
 	}
 

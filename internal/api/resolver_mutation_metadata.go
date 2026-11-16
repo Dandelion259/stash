@@ -24,6 +24,10 @@ func (r *mutationResolver) MetadataScan(ctx context.Context, input manager.ScanM
 	return strconv.Itoa(jobID), nil
 }
 
+func (r *mutationResolver) RegisterRelease(ctx context.Context, input manager.RegisterReleaseInput) (*manager.RegisterReleaseResult, error) {
+	return manager.GetInstance().RegisterRelease(ctx, input)
+}
+
 func (r *mutationResolver) MetadataImport(ctx context.Context) (string, error) {
 	jobID, err := manager.GetInstance().Import(ctx)
 	if err != nil {

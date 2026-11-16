@@ -34,6 +34,9 @@ type ScanJob struct {
 	input         ScanMetadataInput
 	subscriptions *subscriptionManager
 
+	// fs is the file system walked for the paths; the OS file system if nil
+	fs models.FS
+
 	fileQueue chan file.ScannedFile
 	count     int
 
@@ -131,7 +134,10 @@ func (j *ScanJob) runJob(ctx context.Context, paths []string, nTasks int, progre
 const scanQueueSize = 200000
 
 func (j *ScanJob) queueFiles(ctx context.Context, paths []string, progress *job.Progress) error {
-	fs := &file.OsFS{}
+	var fs models.FS = &file.OsFS{}
+	if j.fs != nil {
+		fs = j.fs
+	}
 
 	defer func() {
 		close(j.fileQueue)

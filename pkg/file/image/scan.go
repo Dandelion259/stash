@@ -34,7 +34,7 @@ func (d *Decorator) Decorate(ctx context.Context, fs models.FS, f models.File) (
 
 	// ignore clips in non-OsFS filesystems as ffprobe cannot read them
 	// TODO - copy to temp file if not an OsFS
-	if _, isOs := fs.(*file.OsFS); !isOs {
+	if !file.IsOnDisk(fs) {
 		ext := strings.ToLower(filepath.Ext(base.Path))
 
 		// AVIF images inside zip files are not supported

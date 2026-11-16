@@ -81,6 +81,33 @@ input ScanMetaDataFilterInput {
   minModTime: Timestamp
 }
 
+input RegisterReleaseEntryInput {
+  "Path relative to the release folder"
+  path: String!
+  isDir: Boolean
+  size: Int64
+  "Modification time in seconds since the epoch, as a scan of the folder would see it"
+  modTime: Int64!
+  "Without it the hash is read from the file itself"
+  oshash: String
+}
+
+input RegisterReleaseInput {
+  "The release folder as stash sees it. Must be inside a library"
+  path: String!
+  "The folder's modification time in seconds since the epoch"
+  modTime: Int64!
+  "All files and folders below path"
+  entries: [RegisterReleaseEntryInput!]!
+}
+
+type RegisterReleaseResult {
+  "The scenes of the release's videos"
+  scenes: [ID!]!
+  "The galleries of the release's zip files"
+  galleries: [ID!]!
+}
+
 input ScanMetadataInput {
   paths: [String!]
 

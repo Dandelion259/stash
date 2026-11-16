@@ -477,6 +477,11 @@ type Mutation {
   metadataExport: ID!
   "Start a scan. Returns the job ID"
   metadataScan(input: ScanMetadataInput!): ID!
+  """
+  Add a release folder to the library from a list of its files and folders,
+  without walking the folder. Runs at once and returns when it is done.
+  """
+  registerRelease(input: RegisterReleaseInput!): RegisterReleaseResult!
   "Start generating content. Returns the job ID"
   metadataGenerate(input: GenerateMetadataInput!): ID!
   "Start auto-tagging. Returns the job ID"
