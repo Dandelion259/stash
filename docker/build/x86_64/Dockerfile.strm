@@ -31,11 +31,15 @@ COPY ./cmd /stash/cmd/
 COPY ./internal /stash/internal/
 # needed for generate-login-locale
 COPY ./ui /stash/ui/
-RUN make generate-backend generate-login-locale
+# The module and build caches are kept between builds: without them every build
+# downloads and compiles all dependencies again (7 of its 9 minutes).
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    make generate-backend generate-login-locale
 COPY --from=frontend /stash /stash/
 ARG GITHASH
 ARG STASH_VERSION
-RUN make flags-release flags-pie stash
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    make flags-release flags-pie stash
 
 # Final Runnable Image
 # Runtime packages match the official published image (docker/ci/x86_64/Dockerfile):
