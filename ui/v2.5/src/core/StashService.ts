@@ -209,9 +209,13 @@ export const useFindImages = (filter?: ListFilterModel) =>
     },
   });
 
+// The totals of every image in the library are two sums over all of them (2 s
+// each on 3.7 million images), so they are only fetched for a filtered list.
 export const useFindImagesMetadata = (filter?: ListFilterModel) =>
   GQL.useFindImagesMetadataQuery({
-    skip: filter === undefined,
+    skip:
+      filter === undefined ||
+      (filter.criteria.length === 0 && !filter.searchTerm),
     variables: {
       filter: filter?.makeFindFilter(),
       image_filter: filter?.makeFilter(),

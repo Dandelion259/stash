@@ -1631,6 +1631,49 @@ func queryImagesWithCount(ctx context.Context, sqb models.ImageReader, imageFilt
 }
 
 // #5503 - total size/megapixels must include secondary files of equal size/dimensions
+func TestImageQueryCountUnfiltered(t *testing.T) {
+	withTxn(func(ctx context.Context) error {
+		all, err := db.Image.All(ctx)
+		if err != nil {
+			t.Fatalf("listing images: %v", err)
+		}
+
+		// a sort join must not turn the unfiltered count into a filtered one
+		sort := "path"
+		result, err := db.Image.Query(ctx, models.ImageQueryOptions{
+			QueryOptions: models.QueryOptions{
+				Count:      true,
+				FindFilter: &models.FindFilterType{Sort: &sort},
+			},
+		})
+		if err != nil {
+			t.Fatalf("querying images: %v", err)
+		}
+
+		assert.Equal(t, len(all), result.Count)
+
+		// and a filter must still be counted the long way
+		organized := true
+		result, err = db.Image.Query(ctx, models.ImageQueryOptions{
+			QueryOptions: models.QueryOptions{Count: true},
+			ImageFilter:  &models.ImageFilterType{Organized: &organized},
+		})
+		if err != nil {
+			t.Fatalf("querying organized images: %v", err)
+		}
+
+		want := 0
+		for _, i := range all {
+			if i.Organized {
+				want++
+			}
+		}
+		assert.Equal(t, want, result.Count)
+
+		return nil
+	})
+}
+
 func TestImageQueryTotalSizeMultipleFiles(t *testing.T) {
 	withRollbackTxn(func(ctx context.Context) error {
 		iqb := db.Image

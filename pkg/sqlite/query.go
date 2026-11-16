@@ -37,6 +37,18 @@ func (qb queryBuilder) allArgs() []interface{} {
 	return args
 }
 
+// unfiltered returns true if the query selects every row of its table: nothing
+// but joins that are only needed for sorting.
+func (qb queryBuilder) unfiltered() bool {
+	for _, j := range qb.joins {
+		if !j.sort {
+			return false
+		}
+	}
+
+	return len(qb.whereClauses) == 0 && len(qb.havingClauses) == 0 && len(qb.withClauses) == 0
+}
+
 func (qb queryBuilder) body(includeSortPagination bool) string {
 	return fmt.Sprintf("SELECT %s FROM %s%s", strings.Join(qb.columns, ", "), qb.from, qb.joins.toSQL(includeSortPagination))
 }

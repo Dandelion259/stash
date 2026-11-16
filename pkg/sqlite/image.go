@@ -949,6 +949,19 @@ func (qb *ImageStore) queryGroupedFields(ctx context.Context, options models.Ima
 		return models.NewImageQueryResult(qb), nil
 	}
 
+	// The count of all images needs no DISTINCT over a subquery: on 3.7 million
+	// images that is 1 s, a plain COUNT(*) 0.1 s.
+	if options.Count && !options.Megapixels && !options.TotalSize && query.unfiltered() {
+		total, err := imageRepository.runCountQuery(ctx, "SELECT COUNT(*) as count FROM "+imageTable, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		ret := models.NewImageQueryResult(qb)
+		ret.Count = total
+		return ret, nil
+	}
+
 	aggregateQuery := imageRepository.newQuery()
 
 	if options.Count {
