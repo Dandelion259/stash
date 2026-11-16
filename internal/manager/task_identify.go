@@ -27,6 +27,10 @@ type IdentifyJob struct {
 
 	stashBoxes []*models.StashBox
 	progress   *job.Progress
+
+	// knownScenes are scenes whose stash id on the stash-box sources is known
+	// beforehand (a release grabbed for that scene), by scene id.
+	knownScenes map[int]knownScene
 }
 
 func CreateIdentifyJob(input identify.Options) *IdentifyJob {
@@ -251,6 +255,7 @@ func (j *IdentifyJob) getSources() ([]identify.ScraperSource, error) {
 					sceneFingerprintGetter: instance.SceneService,
 					matcher:                newRelationshipMatcher(),
 					prefetched:             &prefetchedResults{m: map[int][]*models.ScrapedScene{}},
+					knownScenes:            j.knownScenes,
 				},
 				RemoteSite: stashBox.Endpoint,
 			}
@@ -330,6 +335,9 @@ type stashboxSource struct {
 
 	// results of the batched fingerprint query, by scene ID
 	prefetched *prefetchedResults
+
+	// scenes whose stash id on this stash-box is known beforehand, by scene ID
+	knownScenes map[int]knownScene
 }
 
 func newRelationshipMatcher() match.SceneRelationships {
@@ -398,6 +406,23 @@ func (s stashboxSource) prefetch(ctx context.Context, scenes []*models.Scene) []
 
 func (s stashboxSource) ScrapeScenes(ctx context.Context, sceneID int) ([]*models.ScrapedScene, error) {
 	results, ok := s.prefetched.take(sceneID)
+
+	// The release was grabbed for a scene of this stash-box: that scene is taken,
+	// whatever the file's fingerprints match (often nothing, for a new encode).
+	// If the stash-box does not have the id, or the file's duration is not that
+	// scene's, the fingerprints decide as usual.
+	if known, isKnown := s.knownScenes[sceneID]; isKnown {
+		found, err := s.QueryScene(ctx, known.stashID)
+		switch match := knownMatch(found, known); {
+		case err != nil:
+			logger.Warnf("Identify: looking up %s on %s: %v", known.stashID, s.endpoint, err)
+		case match != nil:
+			results, ok = []*models.ScrapedScene{match}, true
+		default:
+			logger.Infof("Identify: scene %d was grabbed for %s, which %s does not have or which has another duration; matching by fingerprints", sceneID, known.stashID, s.endpoint)
+		}
+	}
+
 	if !ok {
 		var fps []models.Fingerprints
 		if err := txn.WithReadTxn(ctx, s.txnManager, func(ctx context.Context) error {

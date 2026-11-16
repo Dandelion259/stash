@@ -23,6 +23,17 @@ type RegisterReleaseInput struct {
 	ModTime int64 `json:"modTime"`
 	// Entries are all files and folders below Path.
 	Entries []*RegisterReleaseEntryInput `json:"entries"`
+	// Identify queues, once the release is registered, the identification of its
+	// scenes against every stash-box and the import of ThePornDB's markers.
+	Identify *bool `json:"identify"`
+	// StashIDs are the stash-box scenes the release was grabbed for. They are
+	// used by Identify, for a release that is a single scene.
+	StashIDs []*RegisterReleaseStashIDInput `json:"stashIds"`
+}
+
+type RegisterReleaseStashIDInput struct {
+	Endpoint string `json:"endpoint"`
+	StashID  string `json:"stashId"`
 }
 
 type RegisterReleaseEntryInput struct {
@@ -150,6 +161,21 @@ func (s *Manager) RegisterRelease(ctx context.Context, input RegisterReleaseInpu
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if input.Identify != nil && *input.Identify && len(ret.Scenes) > 0 {
+		known := make(map[string]string)
+		for _, id := range input.StashIDs {
+			if id != nil && id.Endpoint != "" && id.StashID != "" {
+				known[id.Endpoint] = id.StashID
+			}
+		}
+
+		s.JobManager.Add(context.WithoutCancel(ctx), "Identifying "+filepath.Base(root)+"...", &releaseIdentifyJob{
+			release:       filepath.Base(root),
+			sceneIDs:      scenesOf(ret.Scenes),
+			knownStashIDs: known,
+		})
 	}
 
 	return ret, nil

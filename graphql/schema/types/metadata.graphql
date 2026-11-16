@@ -92,6 +92,11 @@ input RegisterReleaseEntryInput {
   oshash: String
 }
 
+input RegisterReleaseStashIDInput {
+  endpoint: String!
+  stashId: String!
+}
+
 input RegisterReleaseInput {
   "The release folder as stash sees it. Must be inside a library"
   path: String!
@@ -99,6 +104,16 @@ input RegisterReleaseInput {
   modTime: Int64!
   "All files and folders below path"
   entries: [RegisterReleaseEntryInput!]!
+  """
+  Afterwards, identify the release's scenes against every stash-box (one pass
+  each, with the saved Identify options) and add ThePornDB's markers
+  """
+  identify: Boolean
+  """
+  The stash-box scenes the release was grabbed for. Identify takes them for a
+  release that is a single scene, unless the file's duration is another
+  """
+  stashIds: [RegisterReleaseStashIDInput!]
 }
 
 type RegisterReleaseResult {
